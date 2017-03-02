@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+#number=$(expr `echo $((0x\`hostname | $md5 | awk '{print $1}'\`))` % )
+
+base_port=1337
+listen_port=`expr $base_port + 1`
+
+nch_dir=/tmp/nch
+
+mkdir -p $nch_dir
+publishing_to_ports_file=$nch_dir/${base_port}_publish_to.txt
+echo -n "" > $publishing_to_ports_file
+
+listening_on_ports_file=$nch_dir/${base_port}_subscribe_to.txt
+echo -n "" > $listening_on_ports_file
+
+
+listen_file=$nch_dir/hns.txt
+
+function listen {
+  echo "listening ..."
+  nc -kdl $base_port > $listen_file
+  echo "done listening ..."
+}
+
+function listen_to_hostname_on_port {
+  local hostname=$1
+  local use_port=$2
+  fn=/tmp/nch/${hostname}_$use_port.txt
+  touch $fn
+  echo $fn
+  nc -kdl $use_port | while IFS= read -r message ; do
+    echo $hostname says: $message
+  done
+  echo "stopped listening to $hostname on $use_port ..."
+}
+
+function subscribe_to_client {
+  local hostname=$1
+  local subscrption=`grep "$hostname," $listening_on_ports_file`
+  if [[ -z "${subscrption}" ]]; then
+    listen_port=`expr $listen_port + 1`
+    local use_port=$listen_port
+    echo "subscribing to $hostname on $use_port..."
+    fn=/tmp/nch/${hostname}_$use_port.txt
+    listen_to_hostname_on_port $hostname $use_port &
+    echo "opened listener on $use_port for messages from $hostname..."
+    echo $hostname_,$use_port >> $listening_on_ports_file
+    my_hostname=`hostname | sed 's/\.//g'`
+    echo $my_hostname,$use_port | nc $hostname $base_port &
+    echo "sent connect msg to $hostname $base_port, to connect back to me at $my_hostname,$use_port"
+    #while read message; do
+    #  echo $hostname says: $message
+    #done <$fn
+    #echo "done reeading from file $fn"
+  else
+    port=`echo $subscrption | awk -F',' '{print $2}'`
+    echo "already listening for $hostname on $port"
+  fi
+}
+
+function send_msg {
+  #echo "sending to $1 $2..."
+  echo $3 | nc $1 $2
+  #echo "sent to $1 $2."
+}
+
+
+# a publish_to is a hostname and port we remember and send all messages to in
+# the future
+function publish_to_client {
+  hostname=$1
+  port=$2
+  echo "$hostname,$port" >> $publishing_to_ports_file
+}
+
+seen=1
+function check {
+  while true; do
+    latest=`tail -n +$seen $listen_file`
+    if [ "$latest" != "" ]; then
+      echo "read from file: $latest"
+      hostname=`echo $latest | awk -F',' '{print $1}'`
+      port=`echo $latest | awk -F',' '{print $2}'`
+      echo "got a sub req from $hostname $port"
+      seen=`expr $seen + 1`
+
+      publish_to_client $hostname $port
+
+      subscribe_to_client $hostname
+
+      sleep 1
+    fi
+    sleep 1
+  done
+}
+
+
+listen &
+check &
+
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
+
+while read line
+do
+  #echo "would send: $line"
+  while read client; do
+    hostname=`echo $client | awk -F',' '{print $1}'`
+    port=`echo $client | awk -F',' '{print $2}'`
+    #echo "parsed: $hostname $port"
+    if [[ -z "$hostname" &&  -z "$port" ]]; then
+      echo "skipping empty parse"
+    else
+      #echo "will send msg as $hostname $port $line"
+      send_msg $hostname $port $line
+    fi
+  done <$publishing_to_ports_file
+done < "${1:-/dev/stdin}"
+
