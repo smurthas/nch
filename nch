@@ -33,8 +33,6 @@ listening_on_ports_file=$nch_dir/${base_port}_subscribe_to.txt
 echo -n "" > $listening_on_ports_file
 
 
-listen_file=$nch_dir/hns.txt
-
 
 function listen {
   echo "||| Listening for publish requests on $base_port..."
@@ -55,11 +53,11 @@ function listen {
 function listen_to_hostname_on_port {
   local hostname=$1
   local use_port=$2
-  nc -kdl $use_port | while IFS= read -r message ; do
+  nc -kdl $use_port | while read message ; do
     echo -e "$YELLOW$hostname$COLOR_RESET @ `date +%H:%M:%S`"
     echo "    ${message}"
   done
-  echo "stopped listening to $hostname on $use_port ..."
+  echo "|||| Stopped listening to $hostname on $use_port ..."
 }
 
 function subscribe_to_client {
