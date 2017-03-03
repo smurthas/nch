@@ -17,9 +17,28 @@ RED_BLINK="\033[0;31;5m" #red blink
 COLOR_RESET="\033[0m"
 
 
-base_port=$1
-remote_base_port=$2
-my_hostname=$3
+start_port=1337
+users_per_channel=256
+
+function channel_to_port {
+  channel=$1
+  md5=$(which md5 || which md5sum)
+  number=$(expr `echo $((0x\`echo $channel | $md5 | awk '{print $1}'\`))` % 250)
+  # take the absolute value
+  number=`echo ${number#-}`
+
+  # add it to 5 and multiply by 100, so ports start at 1280
+  number=$(expr $number \* $users_per_channel)
+  number=$(expr $number + $start_port)
+
+  echo -en $number
+}
+
+
+base_port=`channel_to_port $1`
+remote_base_port=$base_port
+my_hostname=`hostname`
+
 
 listen_port=`expr $base_port + 1`
 
