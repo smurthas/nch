@@ -78,7 +78,11 @@ function subscribe_to_client {
 }
 
 function send_msg {
-  echo $3 | nc $1 $2
+  hostname=$1
+  port=$2
+  shift
+  shift
+  echo ${@} | nc $hostname $port
 }
 
 
