@@ -8,6 +8,7 @@ YELLOW="\033[0;33m" #yellow
 BLUE="\033[0;34m" #blue
 PURPLE="\033[0;35m" #purple
 CYAN="\033[0;36m" #cyan
+MED_GRAY="\033[0;38;2;128;128;128m" #medium gray
 
 # text craziness
 BLINK="\033[05m" #blink
@@ -32,12 +33,16 @@ echo -n "" > $publishing_to_ports_file
 listening_on_ports_file=$nch_dir/${base_port}_subscribe_to.txt
 echo -n "" > $listening_on_ports_file
 
+listeners=""
 
 listen_file=$nch_dir/hns.txt
 
+function printd {
+  echo -e ${MED_GRAY}$@${COLOR_RESET}
+}
 
 function listen {
-  echo "||| Listening for publish requests on $base_port as $my_hostname"
+  printd "||| Listening for publish requests on $base_port as $my_hostname"
 
   # Listen on $base_port for messages,
   nc -kdl $base_port | while IFS= read -r latest; do
@@ -51,7 +56,7 @@ function listen {
       SUB)
         hostname=`echo $body | awk -F',' '{print $1}'`
         port=`echo $body | awk -F',' '{print $2}'`
-        echo "||| Got a publish to request from $hostname $port"
+        printd "||| Got a publish to request from $hostname $port"
 
         publish_to_client $hostname $port
 
@@ -67,14 +72,14 @@ function listen {
       # Receiving a response from a WHO request we previously made
       # Expect body to be a hostname of someone that the sender knows
       WHOA)
-        echo "||| Got WHOA $body"
+        printd "||| Got WHOA $body"
         subscribe_to_client $body
         ;;
 
     esac
   done
 
-  echo "||| Done listening ..."
+  printd "||| Done listening ..."
 }
 
 function send_who_answer {
@@ -82,11 +87,11 @@ function send_who_answer {
   while read client; do
     hostname=`echo $client | awk -F',' '{print $1}'`
     if [[ -z "$hostname" &&  -z "$port" ]]; then
-      echo "||| WARN: skipping empty parse"
+      printd "||| WARN: skipping empty parse"
     elif [[ $hostname == $send_to_host ]]; then
-      echo "||| DEBUG: Not sending $hostname to $send_to_host"
+      printd "||| DEBUG: Not sending $hostname to $send_to_host"
     else
-      echo "||| Sending WHOA to $send_to_host: $hostname"
+      printd "||| Sending WHOA to $send_to_host: $hostname"
       echo "WHOA ${hostname}" | nc $send_to_host $remote_base_port &
     fi
   done <$publishing_to_ports_file
@@ -95,7 +100,7 @@ function send_who_answer {
 # Request list of who a client knows
 function request_who {
   local their_hostname=$1
-  echo "||| Requesting WHO from $their_hostname"
+  printd "||| Requesting WHO from $their_hostname"
   echo "WHO ${my_hostname}" | nc $their_hostname $remote_base_port &
 }
 
@@ -109,7 +114,7 @@ function listen_to_hostname_on_port {
     echo -e "$YELLOW$hostname$COLOR_RESET @ `date +%H:%M:%S`"
     echo "    ${message}"
   done
-  echo "stopped listening to $hostname on $use_port ..."
+  printd "||| Stopped listening to $hostname on $use_port ..."
 }
 
 # Subscribe to chat messages from another person, but only if we aren't already
@@ -123,12 +128,13 @@ function subscribe_to_client {
     listen_port=`expr $listen_port + 1`
     local use_port=$listen_port
     echo ${hostname},$use_port >> $listening_on_ports_file
-    echo "||| Subscribing to $hostname on $use_port..."
+    printd "||| Subscribing to $hostname on $use_port..."
     listen_to_hostname_on_port $hostname $use_port &
-    echo "||| Opened listener on $use_port for messages from $hostname..."
-    echo "||| Requesting subscription from $hostname on $remote_base_port back to me at $my_hostname,$use_port"
+    listeners="${listeners}${hostname},${use_port}\n"
+    printd "||| Opened listener on $use_port for messages from $hostname..."
+    printd "||| Requesting subscription from $hostname on $remote_base_port back to me at $my_hostname,$use_port"
     echo "SUB ${my_hostname},${use_port}" | nc $hostname $remote_base_port
-    echo "||| Made sub request $hostname on $remote_base_port back to me at $my_hostname,$use_port"
+    printd "||| Made sub request $hostname on $remote_base_port back to me at $my_hostname,$use_port"
 
     # now, ask them who they know
     request_who $hostname
@@ -146,7 +152,7 @@ function publish_to_client {
   hostname=$1
   port=$2
   echo "$hostname,$port" >> $publishing_to_ports_file
-  echo "||| Will publish to $hostname at $port"
+  printd "||| Will publish to $hostname at $port"
 }
 
 listen &
@@ -154,19 +160,28 @@ listen &
 # Kill all these crazy background nc processes when we geta ctrl-c, etc
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
 
+function show_debug_state {
+  printd "Publishing to:"
+  printd `cat $publishing_to_ports_file`
+  printd "Listening to:"
+  printd "$listeners"
+}
+
 # Keep reading from stdin and publishing messages
 while IFS= read -r line; do
   if [[ $line =~ ^\+\+.*$ ]]; then
     hostname=`echo $line | cut -c 3-`
     subscribe_to_client $hostname
+  elif [[ $line =~ ^\?\?\?.*$ ]]; then
+    show_debug_state
   else
     while read client; do
       hostname=`echo $client | awk -F',' '{print $1}'`
       port=`echo $client | awk -F',' '{print $2}'`
       if [[ -z "$hostname" &&  -z "$port" ]]; then
-        echo "skipping empty parse"
+        printd "skipping empty parse"
       else
-        echo "||| Publishing $line to $hostname $port"
+        printd "||| Publishing \"$line\" to $hostname $port"
         send_msg $hostname $port $line
       fi
     done <$publishing_to_ports_file
