@@ -35,6 +35,11 @@ echo -n "" > $listening_on_ports_file
 
 listeners=""
 
+line_buffer=""
+lb_file=$nch_dir/${base_port}_line_buf.txt
+echo -n "" > $lb_file
+
+
 listen_file=$nch_dir/hns.txt
 
 function printd {
@@ -110,9 +115,12 @@ function request_who {
 function listen_to_hostname_on_port {
   local hostname=$1
   local use_port=$2
+  local lb_file=$3
   nc -kdl $use_port | while IFS= read -r message ; do
+    echo -en "\r\033[K"
     echo -e "$YELLOW$hostname$COLOR_RESET @ `date +%H:%M:%S`"
     echo "    ${message}"
+    cat $lb_file
   done
   printd "||| Stopped listening to $hostname on $use_port ..."
 }
@@ -129,7 +137,7 @@ function subscribe_to_client {
     local use_port=$listen_port
     echo ${hostname},$use_port >> $listening_on_ports_file
     printd "||| Subscribing to $hostname on $use_port..."
-    listen_to_hostname_on_port $hostname $use_port &
+    listen_to_hostname_on_port $hostname $use_port $lb_file &
     listeners="${listeners}${hostname},${use_port}\n"
     printd "||| Opened listener on $use_port for messages from $hostname..."
     printd "||| Requesting subscription from $hostname on $remote_base_port back to me at $my_hostname,$use_port"
@@ -172,23 +180,52 @@ function show_debug_state {
 }
 
 # Keep reading from stdin and publishing messages
-while IFS= read -r line; do
-  if [[ $line =~ ^\+\+.*$ ]]; then
-    hostname=`echo $line | cut -c 3-`
-    subscribe_to_client $hostname
-  elif [[ $line =~ ^\?\?\?.*$ ]]; then
-    show_debug_state
+while true; do
+
+  IFS= read -s -n 1 key
+  if [[ $key = "" ]]; then
+    if [[ ${#line_buffer} == 0 ]]; then
+      continue
+    fi
+    # enter, do things
+    echo ""
+    line=$line_buffer
+    line_buffer=""
+    echo -en ${line_buffer} > $lb_file
+
+    if [[ $line =~ ^\+\+.*$ ]]; then
+      hostname=`echo $line | cut -c 3-`
+      subscribe_to_client $hostname
+    elif [[ $line =~ ^\?\?\?.*$ ]]; then
+      show_debug_state
+    else
+      while read client; do
+        hostname=`echo $client | awk -F',' '{print $1}'`
+        port=`echo $client | awk -F',' '{print $2}'`
+        if [[ -z "$hostname" &&  -z "$port" ]]; then
+          printd "skipping empty parse"
+        else
+          printd "||| Publishing \"$line\" to $hostname $port"
+          send_msg $hostname $port $line
+        fi
+      done <$publishing_to_ports_file
+    fi
   else
-    while read client; do
-      hostname=`echo $client | awk -F',' '{print $1}'`
-      port=`echo $client | awk -F',' '{print $2}'`
-      if [[ -z "$hostname" &&  -z "$port" ]]; then
-        printd "skipping empty parse"
-      else
-        printd "||| Publishing \"$line\" to $hostname $port"
-        send_msg $hostname $port $line
+    code=`printf %x \'${key}`
+    if [[ $code == "7f" ]]; then
+      if [[ "$line_buffer" != "" ]]; then
+        echo -en '\b \b'
+        line_buffer=${line_buffer%?}
       fi
-    done <$publishing_to_ports_file
+    else
+      # add to queued input, and print
+      line_buffer="${line_buffer}${key}"
+      echo -en ${key}
+    fi
+
+    echo -en ${line_buffer} > $lb_file
+
   fi
+
 done
 
